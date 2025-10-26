@@ -157,9 +157,6 @@ func (s *Shell) readCodeBlockRaw() (string, bool, error) {
 		n, err := os.Stdin.Read(buf)
 		if err != nil {
 			term.Restore(fd, oldState)
-			if err == io.EOF {
-				return "", false, err
-			}
 			return "", false, err
 		}
 		
