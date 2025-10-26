@@ -131,7 +131,7 @@ func (s *Shell) readCodeBlock(reader *bufio.Reader) (string, bool, error) {
 	return s.readCodeBlockBuffered(reader)
 }
 
-// readCodeBlockRaw reads input using the keyboard library with Esc/Alt+Enter detection
+// readCodeBlockRaw reads input using the keyboard library with Esc/Ctrl+J detection
 func (s *Shell) readCodeBlockRaw() (string, bool, error) {
 	// Initialize keyboard
 	if err := keyboard.Open(); err != nil {
@@ -163,11 +163,7 @@ func (s *Shell) readCodeBlockRaw() (string, bool, error) {
 			}
 		}
 		
-		// Check for Alt+Enter (ESC followed by Enter in sequence)
-		// The keyboard library sends these as separate key events
-		// so we'll use Esc as the submit key
-		
-		// Check for Enter key
+		// Check for Enter key - adds a newline within the code block
 		if key == keyboard.KeyEnter {
 			// Enter adds a newline
 			if lineBuffer.Len() > 0 {
@@ -220,7 +216,7 @@ func (s *Shell) readCodeBlockRaw() (string, bool, error) {
 			continue
 		}
 		
-		// Check for Ctrl+Enter alternative: Ctrl+J (Ctrl+Enter on Unix)
+		// Check for Ctrl+J (alternative to Ctrl+Enter on Unix terminals)
 		if key == keyboard.KeyCtrlJ {
 			// Submit the block
 			if buffer.Len() > 0 || lineBuffer.Len() > 0 {
@@ -236,6 +232,10 @@ func (s *Shell) readCodeBlockRaw() (string, bool, error) {
 				
 				return result, false, nil
 			}
+			// Empty buffer - start fresh
+			fmt.Print("\r\ngosh> ")
+			lineBuffer.Reset()
+			buffer.Reset()
 			continue
 		}
 		
