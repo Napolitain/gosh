@@ -63,7 +63,8 @@ Start the shell:
 
 ```
 Welcome to gosh - Go Shell
-Enter code blocks and press Ctrl+Enter to compile and execute
+Write multi-line code blocks - press Enter for new lines
+Press Esc to execute your code block
 Type 'help' for commands, 'exit' to quit
 
 gosh> fmt.Println("Hello, World!")
@@ -119,9 +120,9 @@ Exiting gosh...
 
 ### Block-Based Input
 
-gosh uses intelligent block detection:
+gosh provides true block-based input:
 - Press **Enter** to add new lines within your code block
-- Code automatically executes when the block appears complete (matching braces/parens)
+- Press **Esc** to execute your code block
 - Perfect for writing multi-line Go code naturally
 
 ### Smart Compilation
@@ -212,7 +213,6 @@ go test ./... -v
 
 ## Future Enhancements
 
-- Enhanced Ctrl+Enter detection for explicit block submission
 - Syntax highlighting in terminal
 - Tab completion for Go keywords and functions
 - Integration with external Go packages
