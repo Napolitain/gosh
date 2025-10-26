@@ -6,12 +6,14 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"syscall"
 
 	"github.com/Napolitain/gosh/internal/workspace"
 	"github.com/traefik/yaegi/interp"
 	"github.com/traefik/yaegi/stdlib"
+	"golang.org/x/term"
 )
 
 // Shell represents the interactive Go shell
@@ -47,8 +49,15 @@ func New() (*Shell, error) {
 
 // Run starts the interactive shell loop
 func (s *Shell) Run() error {
+	// Detect OS for key combination display
+	ctrlKey := "Ctrl"
+	if runtime.GOOS == "darwin" {
+		ctrlKey = "Cmd"
+	}
+	
 	fmt.Println("Welcome to gosh - Go Shell")
-	fmt.Println("Enter code blocks and press Ctrl+Enter to compile and execute")
+	fmt.Println("Write multi-line code blocks - press Enter for new lines")
+	fmt.Printf("Press %s+Enter to execute your code block\n", ctrlKey)
 	fmt.Println("Type 'help' for commands, 'exit' to quit")
 	fmt.Println()
 
@@ -110,13 +119,177 @@ func (s *Shell) Run() error {
 	}
 }
 
-// readCodeBlock reads a multi-line code block until Ctrl+Enter is pressed
+// readCodeBlock reads a multi-line code block
+// Press Enter for new lines, Ctrl+D (Cmd+D on Mac) to submit
 func (s *Shell) readCodeBlock(reader *bufio.Reader) (string, bool, error) {
-	var lines []string
 	fmt.Print("gosh> ")
 	
+	// Check if stdin is a terminal
+	fd := int(os.Stdin.Fd())
+	isTerminal := term.IsTerminal(fd)
+	
+	if isTerminal {
+		// Use raw mode for better control
+		return s.readCodeBlockRaw()
+	}
+	
+	// Fallback for non-terminal (pipes, redirects, etc.)
+	return s.readCodeBlockBuffered(reader)
+}
+
+// readCodeBlockRaw reads input using raw terminal mode with Ctrl+Enter detection
+func (s *Shell) readCodeBlockRaw() (string, bool, error) {
+	fd := int(os.Stdin.Fd())
+	oldState, err := term.MakeRaw(fd)
+	if err != nil {
+		// Fall back to buffered mode if raw mode fails
+		return s.readCodeBlockBuffered(bufio.NewReader(os.Stdin))
+	}
+	defer term.Restore(fd, oldState)
+	
+	var buffer strings.Builder
+	var lineBuffer strings.Builder
+	
+	buf := make([]byte, 1)
+	var prevChar byte
+	
 	for {
-		line, err := reader.ReadString('\n')
+		n, err := os.Stdin.Read(buf)
+		if err != nil {
+			term.Restore(fd, oldState)
+			return "", false, err
+		}
+		
+		if n == 0 {
+			continue
+		}
+		
+		ch := buf[0]
+		
+		// Detect Ctrl+Enter: This typically sends CR (13) without LF
+		// Or on some terminals, it may send LF (10) but we track the pattern
+		// Strategy: 10 (LF) alone = Ctrl+Enter, 13 followed by 10 = regular Enter
+		
+		switch ch {
+		case 3: // Ctrl+C
+			fmt.Print("^C\r\n")
+			term.Restore(fd, oldState)
+			return "", false, io.EOF
+			
+		case 4: // Ctrl+D (EOF)
+			if buffer.Len() == 0 && lineBuffer.Len() == 0 {
+				fmt.Print("^D\r\n")
+				term.Restore(fd, oldState)
+				return "", false, io.EOF
+			}
+			
+		case 10: // LF (Line Feed)
+			// Check if previous char was CR (regular Enter = CR+LF)
+			if prevChar == 13 {
+				// This is regular Enter (CR+LF sequence) - add newline
+				buffer.WriteString(lineBuffer.String())
+				buffer.WriteString("\n")
+				lineBuffer.Reset()
+				fmt.Print("\r\n...  ")
+			} else {
+				// LF without CR = Ctrl+Enter on many Unix terminals
+				// Submit the block
+				if buffer.Len() > 0 || lineBuffer.Len() > 0 {
+					buffer.WriteString(lineBuffer.String())
+					fmt.Print("\r\n")
+					term.Restore(fd, oldState)
+					
+					result := strings.TrimSpace(buffer.String())
+					
+					// Check for exit commands
+					if result == "exit" || result == "quit" {
+						return "", true, nil
+					}
+					
+					return result, false, nil
+				}
+				// Empty buffer - just show new prompt
+				fmt.Print("\r\ngosh> ")
+				lineBuffer.Reset()
+				buffer.Reset()
+			}
+			prevChar = ch
+			continue
+			
+		case 13: // CR (Carriage Return)
+			// Wait to see if LF follows (for regular Enter)
+			// Store CR and continue
+			prevChar = ch
+			continue
+			
+		case 127, 8: // Backspace or DEL
+			if lineBuffer.Len() > 0 {
+				str := lineBuffer.String()
+				lineBuffer.Reset()
+				lineBuffer.WriteString(str[:len(str)-1])
+				fmt.Print("\b \b")
+			}
+			prevChar = ch
+			continue
+			
+		case 9: // Tab
+			lineBuffer.WriteString("    ")
+			fmt.Print("    ")
+			prevChar = ch
+			continue
+			
+		case 27: // ESC - could be escape sequence or ESC key
+			// Read next byte to check for escape sequence
+			// For simplicity, we'll treat standalone ESC as cancel/clear
+			prevChar = ch
+			continue
+			
+		default:
+			// If we had a standalone CR (13) before this character,
+			// it means Ctrl+Enter was pressed (CR without LF)
+			if prevChar == 13 && ch != 10 {
+				// Previous CR was Ctrl+Enter - submit the block
+				if buffer.Len() > 0 || lineBuffer.Len() > 0 {
+					buffer.WriteString(lineBuffer.String())
+					fmt.Print("\r\n")
+					term.Restore(fd, oldState)
+					
+					result := strings.TrimSpace(buffer.String())
+					
+					// Check for exit commands
+					if result == "exit" || result == "quit" {
+						return "", true, nil
+					}
+					
+					return result, false, nil
+				}
+				// Empty buffer - show new prompt and process current character
+				fmt.Print("\r\ngosh> ")
+				lineBuffer.Reset()
+				buffer.Reset()
+			}
+			
+			// Regular printable character
+			if ch >= 32 && ch < 127 {
+				lineBuffer.WriteByte(ch)
+				fmt.Printf("%c", ch)
+			}
+			prevChar = ch
+		}
+	}
+}
+
+// readCodeBlockBuffered reads input using buffered reader (fallback mode)
+// Uses empty line to submit
+func (s *Shell) readCodeBlockBuffered(reader *bufio.Reader) (string, bool, error) {
+	var lines []string
+	
+	firstLine := true
+	for {
+		var line string
+		var err error
+		
+		line, err = reader.ReadString('\n')
 		if err != nil {
 			return "", false, err
 		}
@@ -124,54 +297,39 @@ func (s *Shell) readCodeBlock(reader *bufio.Reader) (string, bool, error) {
 		line = strings.TrimRight(line, "\n\r")
 		
 		// Check for exit command at the beginning
-		if len(lines) == 0 && (line == "exit" || line == "quit") {
+		if firstLine && (line == "exit" || line == "quit") {
 			return "", true, nil
 		}
 		
 		// Check for special commands on first line
-		if len(lines) == 0 && (strings.HasPrefix(line, "help") || 
+		if firstLine && (strings.HasPrefix(line, "help") || 
 			strings.HasPrefix(line, "history") || 
 			strings.HasPrefix(line, "clear") || 
-			strings.HasPrefix(line, "workspace")) {
+			strings.HasPrefix(line, "workspace") ||
+			strings.HasPrefix(line, "reload")) {
 			return line, false, nil
 		}
 		
-		// Simple heuristic: if line ends with specific patterns, continue reading
-		// Otherwise, treat as end of block (simulating Ctrl+Enter behavior)
+		firstLine = false
+		
+		// Empty line submits the block
+		if strings.TrimSpace(line) == "" {
+			if len(lines) > 0 {
+				// Submit the accumulated block
+				return strings.Join(lines, "\n"), false, nil
+			}
+			// Empty input, start over
+			fmt.Print("gosh> ")
+			firstLine = true
+			continue
+		}
+		
+		// Add line to the block
 		lines = append(lines, line)
-		
-		// Check if this looks like a complete statement
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || 
-			strings.HasSuffix(trimmed, "{") || 
-			strings.HasSuffix(trimmed, ",") ||
-			strings.HasPrefix(trimmed, "//") {
-			// Continue reading
-			fmt.Print("... ")
-			continue
-		}
-		
-		// Check if we have an incomplete block
-		blockText := strings.Join(lines, "\n")
-		if s.isIncompleteBlock(blockText) {
-			fmt.Print("... ")
-			continue
-		}
-		
-		// Otherwise, treat as complete block
-		return blockText, false, nil
+		fmt.Print("...  ")
 	}
 }
 
-// isIncompleteBlock checks if a code block is incomplete
-func (s *Shell) isIncompleteBlock(block string) bool {
-	openBraces := strings.Count(block, "{")
-	closeBraces := strings.Count(block, "}")
-	openParens := strings.Count(block, "(")
-	closeParens := strings.Count(block, ")")
-	
-	return openBraces > closeBraces || openParens > closeParens
-}
 
 // handleBuiltinCommand handles shell built-in commands
 func (s *Shell) handleBuiltinCommand(input string) bool {
@@ -296,6 +454,12 @@ func (s *Shell) reloadWorkspace() error {
 
 // printHelp displays help information
 func (s *Shell) printHelp() {
+	// Detect OS for key combination display
+	ctrlKey := "Ctrl"
+	if runtime.GOOS == "darwin" {
+		ctrlKey = "Cmd"
+	}
+	
 	fmt.Println("gosh - Go Shell Commands:")
 	fmt.Println("  help        - Show this help message")
 	fmt.Println("  history     - Show command history")
@@ -305,9 +469,9 @@ func (s *Shell) printHelp() {
 	fmt.Println("  exit/quit   - Exit the shell (prompts to save as CLI tool)")
 	fmt.Println()
 	fmt.Println("Usage:")
-	fmt.Println("  - Type or paste Go code")
-	fmt.Println("  - Press Enter to add new lines")
-	fmt.Println("  - Code block is executed when it appears complete")
+	fmt.Println("  - Type or paste multi-line Go code")
+	fmt.Println("  - Press Enter to add new lines within your code block")
+	fmt.Printf("  - Press %s+Enter to execute the code block\n", ctrlKey)
 	fmt.Println("  - On exit, you can save your session as a Cobra-based CLI tool")
 	fmt.Println()
 	fmt.Println("Examples:")
