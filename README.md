@@ -1,5 +1,8 @@
 # gosh - Go Shell
 
+[![CI](https://github.com/Napolitain/gosh/actions/workflows/ci.yml/badge.svg)](https://github.com/Napolitain/gosh/actions/workflows/ci.yml)
+[![Release](https://github.com/Napolitain/gosh/actions/workflows/auto-release.yml/badge.svg)](https://github.com/Napolitain/gosh/actions/workflows/auto-release.yml)
+
 Go-based shell which works cross-platform (Linux, Windows), is interactive and intuitive to use.
 
 ## Features
@@ -14,6 +17,15 @@ Go-based shell which works cross-platform (Linux, Windows), is interactive and i
 - **Session Persistence**: All session code saved to `~/.gosh/internal/session_TIMESTAMP.go`
 
 ## Installation
+
+### Download Pre-built Binary
+
+Download the latest release from the [Releases](https://github.com/Napolitain/gosh/releases) page:
+
+- **Linux**: `gosh-linux-amd64`
+- **macOS Intel**: `gosh-darwin-amd64`
+- **macOS Apple Silicon**: `gosh-darwin-arm64`
+- **Windows**: `gosh-windows-amd64.exe`
 
 ### From Source
 

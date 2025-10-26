@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.25'
+
+    - name: Go mod tidy
+      run: go mod tidy
+
+    - name: Check for changes after go mod tidy
+      run: |
+        git diff --exit-code go.mod go.sum || (echo "go.mod or go.sum changed after 'go mod tidy'. Please run 'go mod tidy' and commit the changes." && exit 1)
+
+    - name: Build
+      run: go build -v ./...
+
+    - name: Test
+      run: go test -v ./...
