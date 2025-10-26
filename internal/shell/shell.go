@@ -226,9 +226,7 @@ func (s *Shell) readCodeBlockRaw() (string, bool, error) {
 			if lineBuffer.Len() > 0 {
 				str := lineBuffer.String()
 				lineBuffer.Reset()
-				if len(str) > 0 {
-					lineBuffer.WriteString(str[:len(str)-1])
-				}
+				lineBuffer.WriteString(str[:len(str)-1])
 				fmt.Print("\b \b")
 			}
 			prevChar = ch
