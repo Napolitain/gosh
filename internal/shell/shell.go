@@ -51,7 +51,7 @@ func New() (*Shell, error) {
 func (s *Shell) Run() error {
 	fmt.Println("Welcome to gosh - Go Shell")
 	fmt.Println("Write multi-line code blocks - press Enter for new lines")
-	fmt.Println("Press Esc to execute your code block")
+	fmt.Println("Press Esc (or Ctrl+J) to execute your code block")
 	fmt.Println("Type 'help' for commands, 'exit' to quit")
 	fmt.Println()
 
@@ -131,7 +131,7 @@ func (s *Shell) readCodeBlock(reader *bufio.Reader) (string, bool, error) {
 	return s.readCodeBlockBuffered(reader)
 }
 
-// readCodeBlockRaw reads input using the keyboard library with Ctrl+Enter detection
+// readCodeBlockRaw reads input using the keyboard library with Esc/Alt+Enter detection
 func (s *Shell) readCodeBlockRaw() (string, bool, error) {
 	// Initialize keyboard
 	if err := keyboard.Open(); err != nil {
@@ -163,14 +163,13 @@ func (s *Shell) readCodeBlockRaw() (string, bool, error) {
 			}
 		}
 		
+		// Check for Alt+Enter (ESC followed by Enter in sequence)
+		// The keyboard library sends these as separate key events
+		// so we'll use Esc as the submit key
+		
 		// Check for Enter key
 		if key == keyboard.KeyEnter {
-			// Check if Ctrl is held (this detects Ctrl+Enter)
-			// Note: The keyboard library doesn't directly support detecting Ctrl+Enter
-			// as a compound key. We'll use a workaround: double tap Enter quickly
-			// OR we keep the behavior as: Enter adds newline, Ctrl+D submits
-			
-			// For now, Enter adds a newline
+			// Enter adds a newline
 			if lineBuffer.Len() > 0 {
 				buffer.WriteString(lineBuffer.String())
 				lineBuffer.Reset()
@@ -198,9 +197,32 @@ func (s *Shell) readCodeBlockRaw() (string, bool, error) {
 			continue
 		}
 		
-		// Check for Escape (could be used as submit)
+		// Check for Escape - submit the block
 		if key == keyboard.KeyEsc {
-			// Submit the block on Escape
+			// Submit the block
+			if buffer.Len() > 0 || lineBuffer.Len() > 0 {
+				buffer.WriteString(lineBuffer.String())
+				fmt.Println()
+				
+				result := strings.TrimSpace(buffer.String())
+				
+				// Check for exit commands
+				if result == "exit" || result == "quit" {
+					return "", true, nil
+				}
+				
+				return result, false, nil
+			}
+			// Empty buffer - start fresh
+			fmt.Print("\r\ngosh> ")
+			lineBuffer.Reset()
+			buffer.Reset()
+			continue
+		}
+		
+		// Check for Ctrl+Enter alternative: Ctrl+J (Ctrl+Enter on Unix)
+		if key == keyboard.KeyCtrlJ {
+			// Submit the block
 			if buffer.Len() > 0 || lineBuffer.Len() > 0 {
 				buffer.WriteString(lineBuffer.String())
 				fmt.Println()
@@ -411,7 +433,7 @@ func (s *Shell) printHelp() {
 	fmt.Println("Usage:")
 	fmt.Println("  - Type or paste multi-line Go code")
 	fmt.Println("  - Press Enter to add new lines within your code block")
-	fmt.Println("  - Press Esc to execute the code block")
+	fmt.Println("  - Press Esc (or Ctrl+J) to execute the code block")
 	fmt.Println("  - On exit, you can save your session as a Cobra-based CLI tool")
 	fmt.Println()
 	fmt.Println("Examples:")
