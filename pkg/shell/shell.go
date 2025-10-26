@@ -212,7 +212,8 @@ func (s *Shell) printHelp() {
 	fmt.Println("Examples:")
 	fmt.Println("  fmt.Println(\"Hello, World!\")")
 	fmt.Println("  x := 42")
-	fmt.Println("  fmt.Printf(\"x = %d\\n\", x)")
+	example := `  fmt.Printf("x = %d\n", x)`
+	fmt.Println(example)
 }
 
 // printHistory displays command history
