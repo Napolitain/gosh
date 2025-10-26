@@ -12,6 +12,7 @@ import (
 	"github.com/Napolitain/gosh/internal/workspace"
 	"github.com/traefik/yaegi/interp"
 	"github.com/traefik/yaegi/stdlib"
+	"golang.org/x/term"
 )
 
 // Shell represents the interactive Go shell
@@ -48,7 +49,8 @@ func New() (*Shell, error) {
 // Run starts the interactive shell loop
 func (s *Shell) Run() error {
 	fmt.Println("Welcome to gosh - Go Shell")
-	fmt.Println("Enter code blocks and press Ctrl+Enter to compile and execute")
+	fmt.Println("Write multi-line code blocks - press Enter for new lines")
+	fmt.Println("Press Ctrl+D (Cmd+D on Mac) to execute your code block")
 	fmt.Println("Type 'help' for commands, 'exit' to quit")
 	fmt.Println()
 
@@ -110,13 +112,126 @@ func (s *Shell) Run() error {
 	}
 }
 
-// readCodeBlock reads a multi-line code block until Ctrl+Enter is pressed
+// readCodeBlock reads a multi-line code block
+// Press Enter for new lines, Ctrl+D (Cmd+D on Mac) to submit
 func (s *Shell) readCodeBlock(reader *bufio.Reader) (string, bool, error) {
-	var lines []string
 	fmt.Print("gosh> ")
 	
+	// Check if stdin is a terminal
+	fd := int(os.Stdin.Fd())
+	isTerminal := term.IsTerminal(fd)
+	
+	if isTerminal {
+		// Use raw mode for better control
+		return s.readCodeBlockRaw()
+	}
+	
+	// Fallback for non-terminal (pipes, redirects, etc.)
+	return s.readCodeBlockBuffered(reader)
+}
+
+// readCodeBlockRaw reads input in raw terminal mode with Ctrl+D submit
+func (s *Shell) readCodeBlockRaw() (string, bool, error) {
+	fd := int(os.Stdin.Fd())
+	oldState, err := term.MakeRaw(fd)
+	if err != nil {
+		// Fall back to buffered if raw mode fails
+		return s.readCodeBlockBuffered(bufio.NewReader(os.Stdin))
+	}
+	defer term.Restore(fd, oldState)
+	
+	var buffer []rune
+	lineStart := 0 // Track start of current line for backspace
+	
+	buf := make([]byte, 3) // Read up to 3 bytes for potential escape sequences
+	
 	for {
-		line, err := reader.ReadString('\n')
+		n, err := os.Stdin.Read(buf[:1])
+		if err != nil {
+			term.Restore(fd, oldState)
+			if err == io.EOF {
+				return "", false, err
+			}
+			return "", false, err
+		}
+		
+		if n == 0 {
+			continue
+		}
+		
+		ch := buf[0]
+		
+		switch ch {
+		case 3: // Ctrl+C
+			fmt.Print("^C\r\n")
+			term.Restore(fd, oldState)
+			return "", false, io.EOF
+			
+		case 4: // Ctrl+D - Submit block or EOF
+			if len(buffer) == 0 {
+				// Empty buffer - treat as EOF
+				fmt.Print("^D\r\n")
+				term.Restore(fd, oldState)
+				return "", false, io.EOF
+			}
+			// Submit the current block
+			fmt.Print("\r\n")
+			term.Restore(fd, oldState)
+			result := string(buffer)
+			result = strings.TrimSpace(result)
+			
+			// Check for exit commands
+			if result == "exit" || result == "quit" {
+				return "", true, nil
+			}
+			
+			return result, false, nil
+			
+		case 13, 10: // Enter (CR or LF)
+			// Add newline to buffer
+			buffer = append(buffer, '\n')
+			lineStart = len(buffer)
+			fmt.Print("\r\n...  ")
+			
+		case 127, 8: // Backspace or DEL
+			if len(buffer) > lineStart {
+				buffer = buffer[:len(buffer)-1]
+				fmt.Print("\b \b")
+			}
+			
+		case 9: // Tab
+			// Insert 4 spaces for tab
+			buffer = append(buffer, ' ', ' ', ' ', ' ')
+			fmt.Print("    ")
+			
+		case 27: // ESC - potential escape sequence
+			// Try to read more bytes for escape sequences
+			// Set a short timeout or just skip for now
+			// For simplicity, we'll ignore escape sequences
+			continue
+			
+		default:
+			if ch >= 32 && ch < 127 {
+				// Printable ASCII character
+				buffer = append(buffer, rune(ch))
+				fmt.Printf("%c", ch)
+			}
+			// Ignore other control characters
+		}
+	}
+}
+
+// readCodeBlockBuffered reads input using buffered reader (fallback mode)
+// Uses empty line to submit
+func (s *Shell) readCodeBlockBuffered(reader *bufio.Reader) (string, bool, error) {
+	var lines []string
+	
+	firstLine := true
+	for {
+		var line string
+		var err error
+		
+		line, err = reader.ReadString('\n')
 		if err != nil {
 			return "", false, err
 		}
@@ -124,54 +239,39 @@ func (s *Shell) readCodeBlock(reader *bufio.Reader) (string, bool, error) {
 		line = strings.TrimRight(line, "\n\r")
 		
 		// Check for exit command at the beginning
-		if len(lines) == 0 && (line == "exit" || line == "quit") {
+		if firstLine && (line == "exit" || line == "quit") {
 			return "", true, nil
 		}
 		
 		// Check for special commands on first line
-		if len(lines) == 0 && (strings.HasPrefix(line, "help") || 
+		if firstLine && (strings.HasPrefix(line, "help") || 
 			strings.HasPrefix(line, "history") || 
 			strings.HasPrefix(line, "clear") || 
-			strings.HasPrefix(line, "workspace")) {
+			strings.HasPrefix(line, "workspace") ||
+			strings.HasPrefix(line, "reload")) {
 			return line, false, nil
 		}
 		
-		// Simple heuristic: if line ends with specific patterns, continue reading
-		// Otherwise, treat as end of block (simulating Ctrl+Enter behavior)
+		firstLine = false
+		
+		// Empty line submits the block
+		if strings.TrimSpace(line) == "" {
+			if len(lines) > 0 {
+				// Submit the accumulated block
+				return strings.Join(lines, "\n"), false, nil
+			}
+			// Empty input, start over
+			fmt.Print("gosh> ")
+			firstLine = true
+			continue
+		}
+		
+		// Add line to the block
 		lines = append(lines, line)
-		
-		// Check if this looks like a complete statement
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || 
-			strings.HasSuffix(trimmed, "{") || 
-			strings.HasSuffix(trimmed, ",") ||
-			strings.HasPrefix(trimmed, "//") {
-			// Continue reading
-			fmt.Print("... ")
-			continue
-		}
-		
-		// Check if we have an incomplete block
-		blockText := strings.Join(lines, "\n")
-		if s.isIncompleteBlock(blockText) {
-			fmt.Print("... ")
-			continue
-		}
-		
-		// Otherwise, treat as complete block
-		return blockText, false, nil
+		fmt.Print("...  ")
 	}
 }
 
-// isIncompleteBlock checks if a code block is incomplete
-func (s *Shell) isIncompleteBlock(block string) bool {
-	openBraces := strings.Count(block, "{")
-	closeBraces := strings.Count(block, "}")
-	openParens := strings.Count(block, "(")
-	closeParens := strings.Count(block, ")")
-	
-	return openBraces > closeBraces || openParens > closeParens
-}
 
 // handleBuiltinCommand handles shell built-in commands
 func (s *Shell) handleBuiltinCommand(input string) bool {
@@ -305,9 +405,9 @@ func (s *Shell) printHelp() {
 	fmt.Println("  exit/quit   - Exit the shell (prompts to save as CLI tool)")
 	fmt.Println()
 	fmt.Println("Usage:")
-	fmt.Println("  - Type or paste Go code")
-	fmt.Println("  - Press Enter to add new lines")
-	fmt.Println("  - Code block is executed when it appears complete")
+	fmt.Println("  - Type or paste multi-line Go code")
+	fmt.Println("  - Press Enter to add new lines within your code block")
+	fmt.Println("  - Press Ctrl+D (Cmd+D on Mac) to execute the code block")
 	fmt.Println("  - On exit, you can save your session as a Cobra-based CLI tool")
 	fmt.Println()
 	fmt.Println("Examples:")
