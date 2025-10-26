@@ -4,13 +4,14 @@ Go-based shell which works cross-platform (Linux, Windows), is interactive and i
 
 ## Features
 
-- **Interactive REPL**: Execute Go code interactively with immediate feedback
-- **Hot Reload**: Leverages Go's compilation through the yaegi interpreter for instant code execution
-- **Session Management**: Automatically saves your commands as a Go project in a workspace folder
-- **Script Saving**: Save your interactive session as a reusable Go script
+- **Block-Based Input**: Write multi-line Go code naturally - press Enter for new lines, code executes when block is complete
+- **Smart Compilation**: Code only added to project when it compiles successfully
+- **Hot Reload**: Leverages yaegi interpreter for instant code execution without compilation overhead
+- **Workspace as Monorepo**: Maintains a Go monorepo in `~/.gosh/` with session code in `internal/` directory
+- **CLI Tool Generation**: On exit, converts your session into a Cobra-based CLI tool
 - **Cross-Platform**: Works seamlessly on Linux, Windows, and macOS
 - **Command History**: Track and review your command history
-- **Workspace Persistence**: All session code is saved to `~/.gosh/sessions/` for later reference
+- **Session Persistence**: All session code saved to `~/.gosh/internal/session_TIMESTAMP.go`
 
 ## Installation
 
@@ -41,21 +42,34 @@ Start the shell:
 
 - `help` - Show available commands
 - `history` - Display command history
-- `save <filename>` - Save current session to a script file
 - `clear` - Clear history and workspace
-- `workspace` - Show workspace directory path
+- `workspace` - Show workspace information (path, internal path, session ID)
 - `reload` - Reload workspace code
-- `exit` or `quit` - Exit the shell
+- `exit` or `quit` - Exit the shell (prompts to save as CLI tool)
 
 ### Example Session
 
 ```
+Welcome to gosh - Go Shell
+Enter code blocks and press Ctrl+Enter to compile and execute
+Type 'help' for commands, 'exit' to quit
+
 gosh> fmt.Println("Hello, World!")
 Hello, World!
+✓ Code compiled and added to project
 
 gosh> x := 42
-gosh> fmt.Printf("x = %d\n", x)
-x = 42
+✓ Code compiled and added to project
+
+gosh> y := 58
+✓ Code compiled and added to project
+
+gosh> total := x + y
+✓ Code compiled and added to project
+
+gosh> fmt.Printf("Total: %d\n", total)
+Total: 100
+✓ Code compiled and added to project
 
 gosh> for i := 0; i < 3; i++ {
 ...     fmt.Printf("Iteration %d\n", i)
@@ -63,21 +77,47 @@ gosh> for i := 0; i < 3; i++ {
 Iteration 0
 Iteration 1
 Iteration 2
-
-gosh> save my_script
-Script saved to: my_script.go
+✓ Code compiled and added to project
 
 gosh> history
 Command history:
    1  fmt.Println("Hello, World!")
    2  x := 42
-   3  fmt.Printf("x = %d\n", x)
-   4  for i := 0; i < 3; i++ { fmt.Printf("Iteration %d\n", i) }
+   3  y := 58
+   4  total := x + y
+   5  fmt.Printf("Total: %d\n", total)
+   6  for i := 0; i < 3; i++ { fmt.Printf("Iteration %d\n", i) }
+
+gosh> workspace
+Workspace directory: /home/user/.gosh
+Internal directory: /home/user/.gosh/internal
+Session ID: 20251026_143022
 
 gosh> exit
+
+Would you like to save this session as a CLI tool? (y/n): y
+Enter CLI tool name: hello_tool
+✓ CLI tool 'hello_tool' generated successfully!
+  Location: /home/user/.gosh/cmd/hello_tool/
+  To build: cd /home/user/.gosh/cmd/hello_tool && go build
+Exiting gosh...
 ```
 
 ## How It Works
+
+### Block-Based Input
+
+gosh uses intelligent block detection:
+- Press **Enter** to add new lines within your code block
+- Code automatically executes when the block appears complete (matching braces/parens)
+- Perfect for writing multi-line Go code naturally
+
+### Smart Compilation
+
+- Code is compiled and executed when you complete a block
+- **Only on success** is code added to the project workspace
+- Failed compilation shows errors without corrupting your project
+- Success shows "✓ Code compiled and added to project"
 
 ### Hot Reload
 
@@ -87,17 +127,36 @@ gosh uses the [yaegi](https://github.com/traefik/yaegi) Go interpreter, which pr
 - Interactive development and experimentation
 - Fast iteration cycles
 
-### Session Persistence
+### Workspace as Monorepo
 
-Every time you start gosh, it creates a new session directory in `~/.gosh/sessions/` with a timestamp. All commands you execute are automatically appended to a `session.go` file in that directory, making it easy to:
+gosh maintains a Go monorepo structure in `~/.gosh/`:
 
-- Review what you did in a session
-- Save successful experiments as scripts
-- Build up working code incrementally
+```
+~/.gosh/
+├── go.mod              # Module definition
+├── internal/           # Session code
+│   └── session_TIMESTAMP.go
+└── cmd/                # Generated CLI tools
+    └── <tool_name>/
+        └── main.go
+```
 
-### Script Saving
+Each session creates a file in `internal/` with all successfully compiled code blocks. This structure allows you to:
+- Maintain a clean Go module
+- Easily reference code across sessions
+- Build complete applications from sessions
 
-Use the `save` command to export your current session to a named Go script file. The script will be saved in your current session's workspace directory.
+### CLI Tool Generation
+
+When exiting gosh, you can save your session as a Cobra-based CLI tool:
+
+1. Exit with `exit` or `quit` command
+2. Answer "y" when prompted to save as CLI tool
+3. Provide a name for your tool
+4. Tool is generated in `~/.gosh/cmd/<name>/`
+5. Build with: `cd ~/.gosh/cmd/<name> && go build`
+
+The generated CLI reproduces all your session code, making it easy to share or deploy your experiments.
 
 ## Architecture
 
@@ -106,14 +165,18 @@ gosh/
 ├── main.go                 # Entry point
 ├── pkg/
 │   ├── shell/             # Shell REPL implementation
-│   │   └── shell.go
-│   └── workspace/         # Session and file management
-│       └── workspace.go
+│   │   ├── shell.go       # Block-based input & execution
+│   │   └── shell_test.go
+│   └── workspace/         # Workspace management
+│       ├── workspace.go   # Monorepo & CLI generation
+│       └── workspace_test.go
 └── ~/.gosh/               # User workspace (created at runtime)
-    └── sessions/          # Session directories
-        └── YYYYMMDD_HHMMSS/
-            ├── session.go  # Auto-saved session code
-            └── *.go        # Saved scripts
+    ├── go.mod             # Go module definition
+    ├── internal/          # Session code storage
+    │   └── session_TIMESTAMP.go
+    └── cmd/               # Generated CLI tools
+        └── <tool_name>/
+            └── main.go
 ```
 
 ## Development
@@ -124,18 +187,26 @@ gosh/
 go build -o gosh .
 ```
 
+### Running Tests
+
+```bash
+go test ./... -v
+```
+
 ### Dependencies
 
 - [yaegi](https://github.com/traefik/yaegi) - Go interpreter for hot reload functionality
+- [cobra](https://github.com/spf13/cobra) - CLI framework for generated tools
 
 ## Future Enhancements
 
-- Tab completion
-- Syntax highlighting
-- Multi-line input support with proper formatting
+- Enhanced Ctrl+Enter detection for explicit block submission
+- Syntax highlighting in terminal
+- Tab completion for Go keywords and functions
 - Integration with external Go packages
-- Enhanced error messages and debugging
+- Import management UI
 - Configuration file support
+- Multi-user workspace support
 
 ## License
 
