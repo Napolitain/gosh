@@ -8,6 +8,10 @@
 *.so
 *.dylib
 
+# Main binary
+gosh
+gosh-*
+
 # Test binary, built with `go test -c`
 *.test
 

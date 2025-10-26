@@ -1,0 +1,80 @@
+name: Auto Release
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.github/**'
+
+permissions:
+  contents: write
+
+jobs:
+  auto-release:
+    name: Auto Release with Calendar Versioning
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.25'
+
+    - name: Run tests
+      run: |
+        go mod tidy
+        go build -v ./...
+        go test -v ./...
+
+    - name: Generate calendar version tag
+      id: version
+      run: |
+        # Calendar versioning: v.YYYY.MM.DD.BUILD
+        DATE=$(date +%Y.%m.%d)
+        BASE_TAG="v${DATE}"
+        
+        # Check if tag exists and increment build number
+        BUILD=0
+        while git rev-parse "${BASE_TAG}.${BUILD}" >/dev/null 2>&1; do
+          BUILD=$((BUILD + 1))
+        done
+        
+        VERSION="${BASE_TAG}.${BUILD}"
+        echo "version=${VERSION}" >> $GITHUB_OUTPUT
+        echo "Creating version: ${VERSION}"
+
+    - name: Build binaries
+      run: |
+        VERSION="${{ steps.version.outputs.version }}"
+        
+        # Build for Linux
+        GOOS=linux GOARCH=amd64 go build -ldflags "-X main.Version=${VERSION}" -o gosh-linux-amd64 .
+        
+        # Build for macOS
+        GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.Version=${VERSION}" -o gosh-darwin-amd64 .
+        GOOS=darwin GOARCH=arm64 go build -ldflags "-X main.Version=${VERSION}" -o gosh-darwin-arm64 .
+        
+        # Build for Windows
+        GOOS=windows GOARCH=amd64 go build -ldflags "-X main.Version=${VERSION}" -o gosh-windows-amd64.exe .
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ steps.version.outputs.version }}
+        name: Release ${{ steps.version.outputs.version }}
+        files: |
+          gosh-linux-amd64
+          gosh-darwin-amd64
+          gosh-darwin-arm64
+          gosh-windows-amd64.exe
+        draft: false
+        prerelease: false
+        generate_release_notes: true
