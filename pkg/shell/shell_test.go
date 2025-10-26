@@ -21,10 +21,6 @@ func TestNew(t *testing.T) {
 	if sh.history == nil {
 		t.Error("History is nil")
 	}
-
-	if sh.reader == nil {
-		t.Error("Reader is nil")
-	}
 }
 
 func TestExecute(t *testing.T) {
@@ -72,38 +68,38 @@ func TestHandleBuiltinCommand(t *testing.T) {
 	}
 
 	tests := []struct {
-		name     string
-		input    string
+		name      string
+		input     string
 		isBuiltin bool
 	}{
 		{
-			name:     "Help command",
-			input:    "help",
+			name:      "Help command",
+			input:     "help",
 			isBuiltin: true,
 		},
 		{
-			name:     "History command",
-			input:    "history",
+			name:      "History command",
+			input:     "history",
 			isBuiltin: true,
 		},
 		{
-			name:     "Clear command",
-			input:    "clear",
+			name:      "Clear command",
+			input:     "clear",
 			isBuiltin: true,
 		},
 		{
-			name:     "Workspace command",
-			input:    "workspace",
+			name:      "Workspace command",
+			input:     "workspace",
 			isBuiltin: true,
 		},
 		{
-			name:     "Reload command",
-			input:    "reload",
+			name:      "Reload command",
+			input:     "reload",
 			isBuiltin: true,
 		},
 		{
-			name:     "Not a builtin command",
-			input:    "x := 42",
+			name:      "Not a builtin command",
+			input:     "x := 42",
 			isBuiltin: false,
 		},
 	}
@@ -130,13 +126,13 @@ func TestReloadWorkspace(t *testing.T) {
 		t.Fatalf("Failed to create shell: %v", err)
 	}
 
-	// Add some code to workspace
-	code := `func testFunc() int { return 100 }`
-	if err := sh.workspace.AppendCode(code); err != nil {
-		t.Fatalf("Failed to append code: %v", err)
+	// Add some code blocks to workspace
+	code := `x := 100`
+	if err := sh.workspace.AddCodeBlock(code); err != nil {
+		t.Fatalf("Failed to add code block: %v", err)
 	}
 
-	// Reload workspace - this should work without error for function declarations
+	// Reload workspace
 	if err := sh.reloadWorkspace(); err != nil {
 		t.Logf("Note: reload may have issues with certain code types: %v", err)
 	}

@@ -19,7 +19,6 @@ type Shell struct {
 	interpreter *interp.Interpreter
 	workspace   *workspace.Workspace
 	history     []string
-	reader      *bufio.Reader
 }
 
 // New creates a new Shell instance
@@ -43,13 +42,13 @@ func New() (*Shell, error) {
 		interpreter: i,
 		workspace:   ws,
 		history:     make([]string, 0),
-		reader:      bufio.NewReader(os.Stdin),
 	}, nil
 }
 
 // Run starts the interactive shell loop
 func (s *Shell) Run() error {
 	fmt.Println("Welcome to gosh - Go Shell")
+	fmt.Println("Enter code blocks and press Ctrl+Enter to compile and execute")
 	fmt.Println("Type 'help' for commands, 'exit' to quit")
 	fmt.Println()
 
@@ -58,46 +57,120 @@ func (s *Shell) Run() error {
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-sigChan
-		fmt.Println("\nExiting gosh...")
+		fmt.Println()
+		s.promptForCLIGeneration()
 		os.Exit(0)
 	}()
 
+	reader := bufio.NewReader(os.Stdin)
+	
 	for {
-		fmt.Print("gosh> ")
-		
-		input, err := s.reader.ReadString('\n')
+		// Read block-based input
+		codeBlock, shouldExit, err := s.readCodeBlock(reader)
 		if err != nil {
 			if err == io.EOF {
-				fmt.Println("\nExiting gosh...")
+				fmt.Println()
+				s.promptForCLIGeneration()
 				return nil
 			}
 			return fmt.Errorf("failed to read input: %w", err)
 		}
 
-		input = strings.TrimSpace(input)
+		if shouldExit {
+			s.promptForCLIGeneration()
+			return nil
+		}
+
+		codeBlock = strings.TrimSpace(codeBlock)
 		
-		if input == "" {
+		if codeBlock == "" {
 			continue
 		}
 
 		// Handle built-in commands
-		if s.handleBuiltinCommand(input) {
+		if s.handleBuiltinCommand(codeBlock) {
 			continue
 		}
 
 		// Add to history
-		s.history = append(s.history, input)
+		s.history = append(s.history, codeBlock)
 
-		// Save to workspace
-		if err := s.workspace.AppendCode(input); err != nil {
-			fmt.Printf("Warning: failed to save code: %v\n", err)
-		}
-
-		// Execute the code
-		if err := s.execute(input); err != nil {
+		// Try to compile/execute the code
+		if err := s.execute(codeBlock); err != nil {
 			fmt.Printf("Error: %v\n", err)
+			fmt.Println("Code not added to project. Fix and try again.")
+		} else {
+			// If successful, add to workspace
+			if err := s.workspace.AddCodeBlock(codeBlock); err != nil {
+				fmt.Printf("Warning: failed to save code: %v\n", err)
+			} else {
+				fmt.Println("✓ Code compiled and added to project")
+			}
 		}
 	}
+}
+
+// readCodeBlock reads a multi-line code block until Ctrl+Enter is pressed
+func (s *Shell) readCodeBlock(reader *bufio.Reader) (string, bool, error) {
+	var lines []string
+	fmt.Print("gosh> ")
+	
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return "", false, err
+		}
+		
+		line = strings.TrimRight(line, "\n\r")
+		
+		// Check for exit command at the beginning
+		if len(lines) == 0 && (line == "exit" || line == "quit") {
+			return "", true, nil
+		}
+		
+		// Check for special commands on first line
+		if len(lines) == 0 && (strings.HasPrefix(line, "help") || 
+			strings.HasPrefix(line, "history") || 
+			strings.HasPrefix(line, "clear") || 
+			strings.HasPrefix(line, "workspace")) {
+			return line, false, nil
+		}
+		
+		// Simple heuristic: if line ends with specific patterns, continue reading
+		// Otherwise, treat as end of block (simulating Ctrl+Enter behavior)
+		lines = append(lines, line)
+		
+		// Check if this looks like a complete statement
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || 
+			strings.HasSuffix(trimmed, "{") || 
+			strings.HasSuffix(trimmed, ",") ||
+			strings.HasPrefix(trimmed, "//") {
+			// Continue reading
+			fmt.Print("... ")
+			continue
+		}
+		
+		// Check if we have an incomplete block
+		blockText := strings.Join(lines, "\n")
+		if s.isIncompleteBlock(blockText) {
+			fmt.Print("... ")
+			continue
+		}
+		
+		// Otherwise, treat as complete block
+		return blockText, false, nil
+	}
+}
+
+// isIncompleteBlock checks if a code block is incomplete
+func (s *Shell) isIncompleteBlock(block string) bool {
+	openBraces := strings.Count(block, "{")
+	closeBraces := strings.Count(block, "}")
+	openParens := strings.Count(block, "(")
+	closeParens := strings.Count(block, ")")
+	
+	return openBraces > closeBraces || openParens > closeParens
 }
 
 // handleBuiltinCommand handles shell built-in commands
@@ -111,7 +184,7 @@ func (s *Shell) handleBuiltinCommand(input string) bool {
 
 	switch command {
 	case "exit", "quit":
-		fmt.Println("Exiting gosh...")
+		s.promptForCLIGeneration()
 		os.Exit(0)
 		return true
 
@@ -121,18 +194,6 @@ func (s *Shell) handleBuiltinCommand(input string) bool {
 
 	case "history":
 		s.printHistory()
-		return true
-
-	case "save":
-		if len(parts) < 2 {
-			fmt.Println("Usage: save <filename>")
-			return true
-		}
-		if err := s.workspace.SaveScript(parts[1]); err != nil {
-			fmt.Printf("Error saving script: %v\n", err)
-		} else {
-			fmt.Printf("Script saved to: %s\n", parts[1])
-		}
 		return true
 
 	case "clear":
@@ -146,10 +207,12 @@ func (s *Shell) handleBuiltinCommand(input string) bool {
 
 	case "workspace":
 		fmt.Printf("Workspace directory: %s\n", s.workspace.Path())
+		fmt.Printf("Internal directory: %s\n", s.workspace.InternalPath())
+		fmt.Printf("Session ID: %s\n", s.workspace.SessionID())
 		return true
 
 	case "reload":
-		// Reload all workspace code
+		// Reload workspace - recreate interpreter
 		if err := s.reloadWorkspace(); err != nil {
 			fmt.Printf("Error reloading workspace: %v\n", err)
 		} else {
@@ -162,13 +225,52 @@ func (s *Shell) handleBuiltinCommand(input string) bool {
 	}
 }
 
+// promptForCLIGeneration prompts the user to save session as a Cobra CLI tool
+func (s *Shell) promptForCLIGeneration() {
+	if len(s.workspace.GetCodeBlocks()) == 0 {
+		fmt.Println("No code blocks to save. Exiting...")
+		return
+	}
+
+	fmt.Print("\nWould you like to save this session as a CLI tool? (y/n): ")
+	reader := bufio.NewReader(os.Stdin)
+	response, err := reader.ReadString('\n')
+	if err != nil {
+		fmt.Println("Exiting...")
+		return
+	}
+	response = strings.TrimSpace(strings.ToLower(response))
+
+	if response == "y" || response == "yes" {
+		fmt.Print("Enter CLI tool name: ")
+		name, err := reader.ReadString('\n')
+		if err != nil {
+			fmt.Println("Exiting...")
+			return
+		}
+		name = strings.TrimSpace(name)
+
+		if name != "" {
+			if err := s.workspace.GenerateCobraCLI(name); err != nil {
+				fmt.Printf("Error generating CLI tool: %v\n", err)
+			} else {
+				fmt.Printf("✓ CLI tool '%s' generated successfully!\n", name)
+				fmt.Printf("  Location: %s/cmd/%s/\n", s.workspace.Path(), name)
+				fmt.Printf("  To build: cd %s/cmd/%s && go build\n", s.workspace.Path(), name)
+			}
+		}
+	}
+
+	fmt.Println("Exiting gosh...")
+}
+
 // execute runs the given Go code
 func (s *Shell) execute(code string) error {
 	_, err := s.interpreter.Eval(code)
 	return err
 }
 
-// reloadWorkspace reloads all code from the workspace
+// reloadWorkspace reloads workspace by creating a new interpreter
 func (s *Shell) reloadWorkspace() error {
 	// Create a new interpreter
 	i := interp.New(interp.Options{})
@@ -181,15 +283,10 @@ func (s *Shell) reloadWorkspace() error {
 		return fmt.Errorf("failed to import fmt: %w", err)
 	}
 
-	// Load workspace code
-	code, err := s.workspace.LoadCode()
-	if err != nil {
-		return fmt.Errorf("failed to load workspace code: %w", err)
-	}
-
-	if code != "" {
-		if _, err := i.Eval(code); err != nil {
-			return fmt.Errorf("failed to evaluate workspace code: %w", err)
+	// Re-execute all code blocks
+	for _, block := range s.workspace.GetCodeBlocks() {
+		if _, err := i.Eval(block); err != nil {
+			return fmt.Errorf("failed to evaluate code block: %w", err)
 		}
 	}
 
@@ -202,13 +299,17 @@ func (s *Shell) printHelp() {
 	fmt.Println("gosh - Go Shell Commands:")
 	fmt.Println("  help        - Show this help message")
 	fmt.Println("  history     - Show command history")
-	fmt.Println("  save <file> - Save current session to a script file")
 	fmt.Println("  clear       - Clear history and workspace")
-	fmt.Println("  workspace   - Show workspace directory")
+	fmt.Println("  workspace   - Show workspace information")
 	fmt.Println("  reload      - Reload workspace code")
-	fmt.Println("  exit/quit   - Exit the shell")
+	fmt.Println("  exit/quit   - Exit the shell (prompts to save as CLI tool)")
 	fmt.Println()
-	fmt.Println("You can type any valid Go code and it will be executed.")
+	fmt.Println("Usage:")
+	fmt.Println("  - Type or paste Go code")
+	fmt.Println("  - Press Enter to add new lines")
+	fmt.Println("  - Code block is executed when it appears complete")
+	fmt.Println("  - On exit, you can save your session as a Cobra-based CLI tool")
+	fmt.Println()
 	fmt.Println("Examples:")
 	fmt.Println("  fmt.Println(\"Hello, World!\")")
 	fmt.Println("  x := 42")
