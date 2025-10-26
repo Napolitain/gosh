@@ -163,7 +163,7 @@ The generated CLI reproduces all your session code, making it easy to share or d
 ```
 gosh/
 ├── main.go                 # Entry point
-├── pkg/
+├── internal/
 │   ├── shell/             # Shell REPL implementation
 │   │   ├── shell.go       # Block-based input & execution
 │   │   └── shell_test.go

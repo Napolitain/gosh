@@ -39,7 +39,7 @@ Successfully implemented a complete Go-based interactive shell (gosh) that meets
 ```
 gosh/
 ├── main.go                     # Entry point
-├── pkg/
+├── internal/
 │   ├── shell/                  # Shell implementation
 │   │   ├── shell.go           # REPL and command handling
 │   │   └── shell_test.go      # Shell tests
@@ -98,8 +98,8 @@ gosh/
 
 ### All Tests Passing
 ```
-✓ pkg/workspace: PASS (6/6 tests)
-✓ pkg/shell: PASS (all test suites)
+✓ internal/workspace: PASS (6/6 tests)
+✓ internal/shell: PASS (all test suites)
 ```
 
 ## Security Analysis

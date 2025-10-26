@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/Napolitain/gosh/pkg/shell"
+	"github.com/Napolitain/gosh/internal/shell"
 )
 
 func main() {

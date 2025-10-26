@@ -9,7 +9,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/Napolitain/gosh/pkg/workspace"
+	"github.com/Napolitain/gosh/internal/workspace"
 	"github.com/traefik/yaegi/interp"
 	"github.com/traefik/yaegi/stdlib"
 )

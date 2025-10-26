@@ -17,7 +17,7 @@ Thank you for your interest in contributing to gosh! This document provides guid
 
 ### Prerequisites
 
-- Go 1.19 or higher
+- Go 1.25 or higher
 - Git
 
 ### Building
@@ -46,7 +46,7 @@ Run the shell to test your changes:
 ```
 gosh/
 ├── main.go              # Entry point
-├── pkg/
+├── internal/
 │   ├── shell/          # Shell REPL implementation
 │   └── workspace/      # Session and file management
 └── examples/           # Example scripts

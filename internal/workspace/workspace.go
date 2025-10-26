@@ -44,7 +44,7 @@ func New() (*Workspace, error) {
 	// Initialize go.mod if it doesn't exist
 	goModPath := filepath.Join(workspaceDir, "go.mod")
 	if _, err := os.Stat(goModPath); os.IsNotExist(err) {
-		modContent := "module gosh\n\ngo 1.19\n"
+		modContent := "module gosh\n\ngo 1.25\n"
 		if err := os.WriteFile(goModPath, []byte(modContent), 0644); err != nil {
 			return nil, fmt.Errorf("failed to create go.mod: %w", err)
 		}
