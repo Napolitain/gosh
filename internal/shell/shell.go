@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"syscall"
 
@@ -13,7 +14,6 @@ import (
 	"github.com/traefik/yaegi/interp"
 	"github.com/traefik/yaegi/stdlib"
 	"golang.org/x/term"
-	"github.com/eiannone/keyboard"
 )
 
 // Shell represents the interactive Go shell
@@ -49,9 +49,15 @@ func New() (*Shell, error) {
 
 // Run starts the interactive shell loop
 func (s *Shell) Run() error {
+	// Detect OS for key combination display
+	ctrlKey := "Ctrl"
+	if runtime.GOOS == "darwin" {
+		ctrlKey = "Cmd"
+	}
+	
 	fmt.Println("Welcome to gosh - Go Shell")
 	fmt.Println("Write multi-line code blocks - press Enter for new lines")
-	fmt.Println("Press Esc (or Ctrl+J) to execute your code block")
+	fmt.Printf("Press %s+Enter to execute your code block\n", ctrlKey)
 	fmt.Println("Type 'help' for commands, 'exit' to quit")
 	fmt.Println()
 
@@ -131,118 +137,149 @@ func (s *Shell) readCodeBlock(reader *bufio.Reader) (string, bool, error) {
 	return s.readCodeBlockBuffered(reader)
 }
 
-// readCodeBlockRaw reads input using the keyboard library with Esc/Ctrl+J detection
+// readCodeBlockRaw reads input using raw terminal mode with Ctrl+Enter detection
 func (s *Shell) readCodeBlockRaw() (string, bool, error) {
-	// Initialize keyboard
-	if err := keyboard.Open(); err != nil {
-		// Fall back to buffered mode if keyboard library fails
+	fd := int(os.Stdin.Fd())
+	oldState, err := term.MakeRaw(fd)
+	if err != nil {
+		// Fall back to buffered mode if raw mode fails
 		return s.readCodeBlockBuffered(bufio.NewReader(os.Stdin))
 	}
-	defer keyboard.Close()
+	defer term.Restore(fd, oldState)
 	
 	var buffer strings.Builder
-	lineBuffer := strings.Builder{}
+	var lineBuffer strings.Builder
+	
+	buf := make([]byte, 1)
+	var prevChar byte
 	
 	for {
-		char, key, err := keyboard.GetKey()
+		n, err := os.Stdin.Read(buf)
 		if err != nil {
+			term.Restore(fd, oldState)
+			if err == io.EOF {
+				return "", false, err
+			}
 			return "", false, err
 		}
 		
-		// Check for Ctrl+C
-		if key == keyboard.KeyCtrlC {
-			fmt.Println("^C")
-			return "", false, io.EOF
-		}
-		
-		// Check for Ctrl+D
-		if key == keyboard.KeyCtrlD {
-			if buffer.Len() == 0 && lineBuffer.Len() == 0 {
-				fmt.Println("^D")
-				return "", false, io.EOF
-			}
-		}
-		
-		// Check for Enter key - adds a newline within the code block
-		if key == keyboard.KeyEnter {
-			// Enter adds a newline
-			if lineBuffer.Len() > 0 {
-				buffer.WriteString(lineBuffer.String())
-				lineBuffer.Reset()
-			}
-			buffer.WriteString("\n")
-			fmt.Print("\r\n...  ")
+		if n == 0 {
 			continue
 		}
 		
-		// Check for backspace
-		if key == keyboard.KeyBackspace || key == keyboard.KeyBackspace2 {
+		ch := buf[0]
+		
+		// Detect Ctrl+Enter: This typically sends CR (13) without LF
+		// Or on some terminals, it may send LF (10) but we track the pattern
+		// Strategy: 10 (LF) alone = Ctrl+Enter, 13 followed by 10 = regular Enter
+		
+		switch ch {
+		case 3: // Ctrl+C
+			fmt.Print("^C\r\n")
+			term.Restore(fd, oldState)
+			return "", false, io.EOF
+			
+		case 4: // Ctrl+D (EOF)
+			if buffer.Len() == 0 && lineBuffer.Len() == 0 {
+				fmt.Print("^D\r\n")
+				term.Restore(fd, oldState)
+				return "", false, io.EOF
+			}
+			
+		case 10: // LF (Line Feed)
+			// Check if previous char was CR (regular Enter = CR+LF)
+			if prevChar == 13 {
+				// This is regular Enter (CR+LF sequence) - add newline
+				buffer.WriteString(lineBuffer.String())
+				buffer.WriteString("\n")
+				lineBuffer.Reset()
+				fmt.Print("\r\n...  ")
+			} else {
+				// LF without CR = Ctrl+Enter on many Unix terminals
+				// Submit the block
+				if buffer.Len() > 0 || lineBuffer.Len() > 0 {
+					buffer.WriteString(lineBuffer.String())
+					fmt.Print("\r\n")
+					term.Restore(fd, oldState)
+					
+					result := strings.TrimSpace(buffer.String())
+					
+					// Check for exit commands
+					if result == "exit" || result == "quit" {
+						return "", true, nil
+					}
+					
+					return result, false, nil
+				}
+				// Empty buffer - just show new prompt
+				fmt.Print("\r\ngosh> ")
+				lineBuffer.Reset()
+				buffer.Reset()
+			}
+			prevChar = ch
+			continue
+			
+		case 13: // CR (Carriage Return)
+			// Wait to see if LF follows (for regular Enter)
+			// Store CR and continue
+			prevChar = ch
+			continue
+			
+		case 127, 8: // Backspace or DEL
 			if lineBuffer.Len() > 0 {
 				str := lineBuffer.String()
 				lineBuffer.Reset()
-				lineBuffer.WriteString(str[:len(str)-1])
+				if len(str) > 0 {
+					lineBuffer.WriteString(str[:len(str)-1])
+				}
 				fmt.Print("\b \b")
 			}
+			prevChar = ch
 			continue
-		}
-		
-		// Check for Tab
-		if key == keyboard.KeyTab {
+			
+		case 9: // Tab
 			lineBuffer.WriteString("    ")
 			fmt.Print("    ")
+			prevChar = ch
 			continue
-		}
-		
-		// Check for Escape - submit the block
-		if key == keyboard.KeyEsc {
-			// Submit the block
-			if buffer.Len() > 0 || lineBuffer.Len() > 0 {
-				buffer.WriteString(lineBuffer.String())
-				fmt.Println()
-				
-				result := strings.TrimSpace(buffer.String())
-				
-				// Check for exit commands
-				if result == "exit" || result == "quit" {
-					return "", true, nil
+			
+		case 27: // ESC - could be escape sequence or ESC key
+			// Read next byte to check for escape sequence
+			// For simplicity, we'll treat standalone ESC as cancel/clear
+			prevChar = ch
+			continue
+			
+		default:
+			// If we had a standalone CR (13) before this character,
+			// it means Ctrl+Enter was pressed (CR without LF)
+			if prevChar == 13 && ch != 10 {
+				// Previous CR was Ctrl+Enter - submit the block
+				if buffer.Len() > 0 || lineBuffer.Len() > 0 {
+					buffer.WriteString(lineBuffer.String())
+					fmt.Print("\r\n")
+					term.Restore(fd, oldState)
+					
+					result := strings.TrimSpace(buffer.String())
+					
+					// Check for exit commands
+					if result == "exit" || result == "quit" {
+						return "", true, nil
+					}
+					
+					return result, false, nil
 				}
-				
-				return result, false, nil
+				// Empty buffer - show new prompt and process current character
+				fmt.Print("\r\ngosh> ")
+				lineBuffer.Reset()
+				buffer.Reset()
 			}
-			// Empty buffer - start fresh
-			fmt.Print("\r\ngosh> ")
-			lineBuffer.Reset()
-			buffer.Reset()
-			continue
-		}
-		
-		// Check for Ctrl+J (alternative to Ctrl+Enter on Unix terminals)
-		if key == keyboard.KeyCtrlJ {
-			// Submit the block
-			if buffer.Len() > 0 || lineBuffer.Len() > 0 {
-				buffer.WriteString(lineBuffer.String())
-				fmt.Println()
-				
-				result := strings.TrimSpace(buffer.String())
-				
-				// Check for exit commands
-				if result == "exit" || result == "quit" {
-					return "", true, nil
-				}
-				
-				return result, false, nil
+			
+			// Regular printable character
+			if ch >= 32 && ch < 127 {
+				lineBuffer.WriteByte(ch)
+				fmt.Printf("%c", ch)
 			}
-			// Empty buffer - start fresh
-			fmt.Print("\r\ngosh> ")
-			lineBuffer.Reset()
-			buffer.Reset()
-			continue
-		}
-		
-		// Handle regular characters
-		if char != 0 {
-			lineBuffer.WriteRune(char)
-			fmt.Printf("%c", char)
+			prevChar = ch
 		}
 	}
 }
@@ -422,6 +459,12 @@ func (s *Shell) reloadWorkspace() error {
 
 // printHelp displays help information
 func (s *Shell) printHelp() {
+	// Detect OS for key combination display
+	ctrlKey := "Ctrl"
+	if runtime.GOOS == "darwin" {
+		ctrlKey = "Cmd"
+	}
+	
 	fmt.Println("gosh - Go Shell Commands:")
 	fmt.Println("  help        - Show this help message")
 	fmt.Println("  history     - Show command history")
@@ -433,7 +476,7 @@ func (s *Shell) printHelp() {
 	fmt.Println("Usage:")
 	fmt.Println("  - Type or paste multi-line Go code")
 	fmt.Println("  - Press Enter to add new lines within your code block")
-	fmt.Println("  - Press Esc (or Ctrl+J) to execute the code block")
+	fmt.Printf("  - Press %s+Enter to execute the code block\n", ctrlKey)
 	fmt.Println("  - On exit, you can save your session as a Cobra-based CLI tool")
 	fmt.Println()
 	fmt.Println("Examples:")

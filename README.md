@@ -64,7 +64,7 @@ Start the shell:
 ```
 Welcome to gosh - Go Shell
 Write multi-line code blocks - press Enter for new lines
-Press Esc (or Ctrl+J) to execute your code block
+Press Ctrl+Enter (Cmd+Enter on Mac) to execute your code block
 Type 'help' for commands, 'exit' to quit
 
 gosh> fmt.Println("Hello, World!")
@@ -122,7 +122,7 @@ Exiting gosh...
 
 gosh provides true block-based input:
 - Press **Enter** to add new lines within your code block
-- Press **Esc** (or **Ctrl+J**) to execute your code block
+- Press **Ctrl+Enter** (**Cmd+Enter** on Mac) to execute your code block
 - Perfect for writing multi-line Go code naturally
 
 ### Smart Compilation

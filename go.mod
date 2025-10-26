@@ -3,7 +3,6 @@ module github.com/Napolitain/gosh
 go 1.25
 
 require (
-	github.com/eiannone/keyboard v0.0.0-20220611211555-0d226195f203
 	github.com/traefik/yaegi v0.16.1
 	golang.org/x/term v0.36.0
 )
